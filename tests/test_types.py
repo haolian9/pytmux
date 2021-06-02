@@ -14,6 +14,7 @@ def test_noti_from_bytes():
         b"%sessions-changed\n",
         b"%exit\n",
         b"%window-add @35\n",
+        b"%layout-change @59 3369,232x48,0,0,119 3369,232x48,0,0,119 *\n",
     ]
 
     headers = {noti.header: noti for noti in types.ALL_NOTI}

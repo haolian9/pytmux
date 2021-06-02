@@ -14,7 +14,10 @@ class FulFiled(Exception):
 
 
 class NeedMore(Exception):
-    ...
+    def __init__(self, readn: int):
+        super().__init__()
+
+        self.readn = readn
 
 
 class ProtocolError(Exception):
@@ -34,63 +37,6 @@ def header_in_line(line: bytes) -> bytes:
         header = bytes(line[:-1])
 
     return header
-
-
-class StreamReader:
-    def __init__(self):
-        self._short = bytearray()
-        self._event = EventReader()
-
-    def feed(self, data: bytes):
-        _log.debug("feed %s data", len(data))
-
-        if self._event.fulfiled:
-            raise FulFiled(0)
-
-        self._feed(data)
-
-    def _feed(self, data: bytes):
-
-        start = 0
-        end = len(data) - 1
-
-        while True:
-            short = self._short
-            assert b"\n" not in short
-
-            eol = data.find(b"\n", start)
-            if eol < 0:
-                short.extend(data)
-                assert b"\n" not in short
-                raise NeedMore
-
-            short.extend(data[start : eol + 1])
-            assert short.endswith(b"\n")
-            start = eol + 1
-
-            line = short
-            self._short = bytearray()
-
-            try:
-                self._event.feed(line)
-            except FulFiled as e:
-                line_rest = len(line) - e.readn
-                data_rest = end - start
-                readn = end - data_rest - line_rest
-                assert readn >= 0
-                # pylint: disable=raise-missing-from
-                raise FulFiled(readn)
-            except NeedMore:
-                pass
-
-            if start > end:
-                raise NeedMore
-
-    def flush(self):
-        if not self._event.fulfiled:
-            raise NeedMore
-
-        return self._event.flush()
 
 
 _ONELINE_EVENTS = {noti.header: noti for noti in types.ALL_NOTI}
@@ -117,6 +63,11 @@ class EventReader:
         self._current(line)
 
     def _head_wrap(self, line: bytes):
+        assert not self._buffer
+        assert not self._event_cls
+        assert not self._fulfiled
+        assert self._current == self._head_wrap
+
         header = header_in_line(line)
 
         try:
@@ -140,7 +91,7 @@ class EventReader:
             self._buffer.extend(line)
             _log.debug("head wrap indicates multiline event, waiting for body")
             self._current = self._body
-            raise NeedMore
+            raise NeedMore(len(line))
 
         raise ProtocolError("unknown head wrap")
 
@@ -152,7 +103,7 @@ class EventReader:
             self._fulfiled = True
             raise FulFiled(len(line))
 
-        raise NeedMore
+        raise NeedMore(len(line))
 
     @classmethod
     def _is_end_wrap(cls, line: bytes):
@@ -168,7 +119,7 @@ class EventReader:
 
     def flush(self) -> types.Event:
         if not self._fulfiled:
-            raise NeedMore
+            raise NeedMore(0)
 
         data = self._buffer
         cls = self._event_cls
@@ -181,3 +132,60 @@ class EventReader:
         self._current = self._head_wrap
 
         return event
+
+
+class StreamReader:
+    def __init__(self, eventreader_cls=EventReader):
+        self._short = bytearray()
+        self._event: EventReader = eventreader_cls()
+
+    def feed(self, data: bytes):
+        _log.debug("feed %s data", len(data))
+
+        if self._event.fulfiled:
+            raise FulFiled(0)
+
+        self._feed(data)
+
+    def _feed(self, data: bytes):
+
+        start = 0
+        end = len(data) - 1
+
+        while True:
+            short = self._short
+            assert b"\n" not in short
+
+            eol = data.find(b"\n", start)
+            if eol < 0:
+                short.extend(data[start:])
+                assert b"\n" not in short
+                raise NeedMore(len(data))
+
+            short.extend(data[start : eol + 1])
+            assert short.endswith(b"\n")
+            start = eol + 1
+
+            line = short
+            self._short = bytearray()
+
+            try:
+                self._event.feed(line)
+            except FulFiled as e:
+                line_rest = len(line) - e.readn
+                data_rest = end - start
+                readn = end - data_rest - line_rest
+                assert readn >= 0
+                # pylint: disable=raise-missing-from
+                raise FulFiled(readn)
+            except NeedMore as e:
+                assert e.readn == len(line)
+
+            if start > end:
+                raise NeedMore(len(data))
+
+    def flush(self):
+        if not self._event.fulfiled:
+            raise NeedMore(0)
+
+        return self._event.flush()

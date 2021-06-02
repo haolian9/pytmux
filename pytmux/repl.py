@@ -1,10 +1,11 @@
+import atexit
 import logging
 import os
 import select
 import subprocess
 from threading import Event, Thread
 
-from pytmux import reader
+from pytmux import reader, types
 
 
 class Reporter(Thread):
@@ -24,7 +25,7 @@ class Reporter(Thread):
         sr = reader.StreamReader()
 
         while True:
-            if term.set():
+            if term.is_set():
                 break
 
             events = epoll.poll(0.01)
@@ -34,31 +35,40 @@ class Reporter(Thread):
                 if _etype != select.EPOLLIN:
                     continue
 
-                data = os.read(fd, pipebuf)
+                data = bytearray(os.read(fd, pipebuf))
                 while True:
                     if not data:
                         break
                     try:
                         sr.feed(data)
-                    except reader.NeedMore:
-                        continue
+                    except reader.NeedMore as e:
+                        assert e.readn == len(data)
+                        break
                     except reader.FulFiled as e:
+                        assert e.readn > 0
                         event = sr.flush()
-                        print(event)
+                        if isinstance(event, types.Output):
+                            print("output event, ommitted ...")
+                        else:
+                            print(event)
                         data = data[e.readn :]
                     else:
                         raise RuntimeError("should never reach here")
 
 
+# tmux -CC
+# tmux -C new-session -s controlmode [-d]
+# tmux -C attach-session -t controlmode
+
 proc = subprocess.Popen(
-    ["/usr/bin/tmux", "-C"],
+    ["/usr/bin/tmux", "-C", "attach-session", "-t", "controlmode"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     stderr=subprocess.DEVNULL,
     shell=False,
     cwd="/",
     text=False,
-    close_fds=True,
+    close_fds=False,
 )
 
 epoll = select.epoll()
@@ -87,6 +97,9 @@ def cleanup():
         term.set()
         reporter.join()
         send_command("\n")
+
+
+atexit.register(cleanup)
 
 
 def send_command(command: str):
