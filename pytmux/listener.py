@@ -61,12 +61,16 @@ class Listener:
     notiq: NotiQ = attr.ib()
 
     _thread: threading.Thread = attr.ib(init=False, default=None)
+    _dead: bool = attr.ib(init=False, default=False)
 
     @classmethod
     def from_args(cls, fd: int, reply_cap: int, noti_cap: int):
         return cls(fd, threading.Event(), ReplyQ(reply_cap), NotiQ(noti_cap))
 
     def listen_in_background(self):
+        if self._dead:
+            raise RuntimeError("listener already dead, can not listen anymore")
+
         if self._thread:
             return
 
@@ -80,20 +84,38 @@ class Listener:
         self.close()
 
     def close(self):
-        if self._thread:
-            self.term.set()
-            self._thread.join()
-            self._thread = None
+        if self._dead:
+            return
+
+        if not self._thread:
+            return
+
+        self.term.set()
+        self._thread.join()
+        self._dead = True
+        self._thread.raise_if_any()
 
 
 class Thread(threading.Thread):
     # pylint: disable=too-many-arguments
     def __init__(self, listener: Listener):
         self._listener = listener
+        self._exc = None
 
         super().__init__(daemon=True)
 
+    def raise_if_any(self):
+        if self._exc:
+            raise self._exc
+
     def run(self):
+        try:
+            self._run()
+        # pylint: disable=broad-except
+        except Exception as e:
+            self._exc = e
+
+    def _run(self):
         term = self._listener.term
         fd = self._listener.fd
         replyq = self._listener.replyq
@@ -111,9 +133,13 @@ class Thread(threading.Thread):
                 events = poller.poll(0.05)
                 for _ in events:
 
+                    # TODO@haoliang prefer memoryview
                     data = bytearray(os.read(fd, pipebuf))
+                    if data == b"":
+                        raise EOFError(f"fd#{fd} were closed")
+
                     while True:
-                        if not data:
+                        if data == b"":
                             break
 
                         try:

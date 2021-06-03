@@ -32,9 +32,8 @@ listener.listen_in_background()
 
 
 def cleanup():
-    listener.close()
-
     with proc:
+        listener.close()
         send_command("\n")
 
 

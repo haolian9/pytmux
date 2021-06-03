@@ -152,6 +152,7 @@ class EventReader(EventReaderABC):
 
 class StreamReader:
     def __init__(self, er: EventReaderABC = None):
+        # TODO@haoliang maybe using io.BytesIO
         # shot: not enough for a line
         self._short = bytearray()
 
