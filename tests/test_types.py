@@ -36,10 +36,10 @@ scratchpad: 2 windows (created Mon May 31 17:40:20 2021) (attached)
 """
 
     # header = reader.header_in_line(data[:data.find(b'\n')+1])
-    block = types.Block.from_bytes(data)
+    reply = types.Reply.from_bytes(data)
 
-    assert block.success
-    assert block.head_wrap.header == b"%begin"
-    assert block.end_wrap.header == b"%end"
-    assert block.body.startswith(b"26")
-    assert block.body.endswith(b"attached)\n")
+    assert reply.success
+    assert reply.head_wrap.header == b"%begin"
+    assert reply.end_wrap.header == b"%end"
+    assert reply.body.startswith(b"26")
+    assert reply.body.endswith(b"attached)\n")

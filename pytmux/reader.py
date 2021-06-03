@@ -1,3 +1,4 @@
+import abc
 import logging
 import typing as T
 
@@ -40,14 +41,28 @@ def header_in_line(line: bytes) -> bytes:
 
 
 _ONELINE_EVENTS = {noti.header: noti for noti in types.ALL_NOTI}
-_MULTILINE_EVENTS = {types.Block.header: types.Block}
+_MULTILINE_EVENTS = {types.Reply.header: types.Reply}
 _BLOCK_END_HEADERS = {e.value for e in types.BlockEnd}
 
 
-class EventReader:
+class EventReaderABC(abc.ABC):
+    @abc.abstractproperty
+    def fulfiled(self):
+        pass
+
+    @abc.abstractmethod
+    def feed(self, line: bytes):
+        pass
+
+    @abc.abstractmethod
+    def flush(self) -> types.Event:
+        pass
+
+
+class EventReader(EventReaderABC):
     def __init__(self):
         self._buffer = bytearray()
-        self._event_cls: T.Optional = None
+        self._event_cls: T.Optional[types.Event] = None
         self._fulfiled = False
 
         self._current = self._head_wrap
@@ -96,6 +111,8 @@ class EventReader:
         raise ProtocolError("unknown head wrap")
 
     def _body(self, line: bytes):
+        assert self._event_cls
+
         self._buffer.extend(line)
 
         if self._is_end_wrap(line):
@@ -122,9 +139,8 @@ class EventReader:
             raise NeedMore(0)
 
         data = self._buffer
-        cls = self._event_cls
-        assert issubclass(cls, types.Event)
-        event = cls.from_bytes(data)
+        assert self._event_cls
+        event = self._event_cls.from_bytes(data)
 
         self._buffer = bytearray()
         self._event_cls = None
@@ -135,14 +151,16 @@ class EventReader:
 
 
 class StreamReader:
-    def __init__(self, eventreader_cls=EventReader):
+    def __init__(self, er: EventReaderABC = None):
+        # shot: not enough for a line
         self._short = bytearray()
-        self._event: EventReader = eventreader_cls()
+
+        self._er = er if er else EventReader()
 
     def feed(self, data: bytes):
         _log.debug("feed %s data", len(data))
 
-        if self._event.fulfiled:
+        if self._er.fulfiled:
             raise FulFiled(0)
 
         self._feed(data)
@@ -170,7 +188,7 @@ class StreamReader:
             self._short = bytearray()
 
             try:
-                self._event.feed(line)
+                self._er.feed(line)
             except FulFiled as e:
                 line_rest = len(line) - e.readn
                 data_rest = end - start
@@ -185,7 +203,7 @@ class StreamReader:
                 raise NeedMore(len(data))
 
     def flush(self):
-        if not self._event.fulfiled:
+        if not self._er.fulfiled:
             raise NeedMore(0)
 
-        return self._event.flush()
+        return self._er.flush()

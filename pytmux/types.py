@@ -38,7 +38,7 @@ class BlockEnd(Enum):
 
 class Event:
     @classmethod
-    def from_bytes(cls, data: bytes):
+    def from_bytes(cls, data: bytearray):
         raise NotImplementedError()
 
 
@@ -50,14 +50,14 @@ class _BlockWrap(Event):
     flags: int = attr.ib(converter=_to_int)
 
     @classmethod
-    def from_bytes(cls, data: bytes):
+    def from_bytes(cls, data: bytearray):
         header, timestamp, number, flags = data.split(b" ", maxsplit=3)
 
         return cls(header, timestamp, number, flags)
 
 
 @attr.s
-class Block(Event):
+class Reply(Event):
     """Every %begin, %end or %error has three arguments:
     * the time as seconds from epoch;
     * a unique command number;
@@ -75,7 +75,7 @@ class Block(Event):
         return self.end_wrap.header == BlockEnd.END.value
 
     @classmethod
-    def from_bytes(cls, data: bytes):
+    def from_bytes(cls, data: bytearray):
         eol_first = data.find(b"\n")
         hdata = data[: eol_first + 1]
         eol_last = data.rfind(b"\n", 0, -2)
@@ -105,7 +105,7 @@ class Notification(Event):
         ALL_NOTI.append(cls)
 
     @classmethod
-    def from_bytes(cls, data: bytes):
+    def from_bytes(cls, data: bytearray):
         assert data.startswith(cls.header)
         assert data.endswith(b"\n")
 
@@ -114,7 +114,7 @@ class Notification(Event):
         if not fields:
             return cls()
 
-        _, *parts = data.split(b" ", maxsplit=len(fields) - 1 + 1)
+        _, *parts = data[:-1].split(b" ", maxsplit=len(fields) - 1 + 1)
 
         return cls(*parts)
 
