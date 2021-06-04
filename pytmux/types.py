@@ -2,8 +2,10 @@
 see: https://github.com/tmux/tmux/wiki/Control-Mode
 """
 
+import abc
 import typing as T
 from enum import Enum
+from io import BytesIO
 
 import attr
 
@@ -36,10 +38,17 @@ class BlockEnd(Enum):
     ERROR = b"%error"
 
 
-class Event:
-    @classmethod
-    def from_bytes(cls, data: bytearray):
-        raise NotImplementedError()
+Lines = T.List[bytes]
+
+
+class Event(abc.ABC):
+    @abc.abstractclassmethod
+    def from_bytes(cls, data: bytes):
+        pass
+
+    @abc.abstractclassmethod
+    def from_lined_bytes(cls, lines: Lines):
+        pass
 
 
 @attr.s
@@ -50,10 +59,15 @@ class _BlockWrap(Event):
     flags: int = attr.ib(converter=_to_int)
 
     @classmethod
-    def from_bytes(cls, data: bytearray):
+    def from_bytes(cls, data: bytes):
         header, timestamp, number, flags = data.split(b" ", maxsplit=3)
 
         return cls(header, timestamp, number, flags)
+
+    @classmethod
+    def from_lined_bytes(cls, lines: Lines):
+        assert len(lines) == 1
+        return cls.from_bytes(lines[0])
 
 
 @attr.s
@@ -67,7 +81,7 @@ class Reply(Event):
     header = b"%begin"
 
     head_wrap: _BlockWrap = attr.ib()
-    body: bytes = attr.ib()  # could be multi-line
+    body: Lines = attr.ib()  # could be multi-line
     end_wrap: _BlockWrap = attr.ib()
 
     @property
@@ -75,15 +89,25 @@ class Reply(Event):
         return self.end_wrap.header == BlockEnd.END.value
 
     @classmethod
-    def from_bytes(cls, data: bytearray):
+    def from_bytes(cls, data: bytes):
         eol_first = data.find(b"\n")
         hdata = data[: eol_first + 1]
         eol_last = data.rfind(b"\n", 0, -2)
         edata = data[eol_last + 1 :]
-        body = data[eol_first + 1 : eol_last + 1]
+        body = list(BytesIO(data[eol_first + 1 : eol_last + 1]))
 
         head_wrap = _BlockWrap.from_bytes(hdata)
         end_wrap = _BlockWrap.from_bytes(edata)
+
+        return cls(head_wrap, body, end_wrap)
+
+    @classmethod
+    def from_lined_bytes(cls, lines: Lines):
+        assert len(lines) >= 2
+
+        head_wrap = _BlockWrap.from_bytes(lines[0])
+        end_wrap = _BlockWrap.from_bytes(lines[-1])
+        body = lines[1:-1]
 
         return cls(head_wrap, body, end_wrap)
 
@@ -105,7 +129,7 @@ class Notification(Event):
         ALL_NOTI.append(cls)
 
     @classmethod
-    def from_bytes(cls, data: bytearray):
+    def from_bytes(cls, data: bytes):
         assert data.startswith(cls.header)
         assert data.endswith(b"\n")
 
@@ -117,6 +141,11 @@ class Notification(Event):
         _, *parts = data[:-1].split(b" ", maxsplit=len(fields) - 1 + 1)
 
         return cls(*parts)
+
+    @classmethod
+    def from_lined_bytes(cls, lines: Lines):
+        assert len(lines) == 1
+        return cls.from_bytes(lines[0])
 
 
 @attr.s
@@ -307,7 +336,6 @@ class Output(Notification):
 
     header = b"%output"
     pane: int = attr.ib(converter=_percent_int)
-    # TODO@haoliang
     value: bytes = attr.ib()
 
 

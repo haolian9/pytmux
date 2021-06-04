@@ -41,5 +41,5 @@ scratchpad: 2 windows (created Mon May 31 17:40:20 2021) (attached)
     assert reply.success
     assert reply.head_wrap.header == b"%begin"
     assert reply.end_wrap.header == b"%end"
-    assert reply.body.startswith(b"26")
-    assert reply.body.endswith(b"attached)\n")
+    assert reply.body[0].startswith(b"26")
+    assert reply.body[-1].endswith(b"attached)\n")

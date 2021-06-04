@@ -1,3 +1,4 @@
+import contextlib
 import os
 import select
 import threading
@@ -7,7 +8,7 @@ from queue import Empty, Queue
 import attr
 
 from .reader import FulFiled, NeedMore, StreamReader
-from .types import Notification, Reply
+from .types import Exit, Notification, Reply
 
 
 class ReplyQ:
@@ -60,6 +61,7 @@ class Listener:
     replyq: ReplyQ = attr.ib()
     notiq: NotiQ = attr.ib()
 
+    _dingdong: threading.Condition = attr.ib(init=False)
     _thread: threading.Thread = attr.ib(init=False, default=None)
     _dead: bool = attr.ib(init=False, default=False)
 
@@ -69,13 +71,28 @@ class Listener:
 
     def listen_in_background(self):
         if self._dead:
-            raise RuntimeError("listener already dead, can not listen anymore")
+            raise RuntimeError("listener was dead, can not listen anymore")
 
         if self._thread:
             return
 
+        self._dingdong = threading.Condition()
         self._thread = Thread(self)
         self._thread.start()
+
+    @contextlib.contextmanager
+    def dingdong(self):
+        """
+        :raise: ValueError when term.is_set()
+        """
+
+        if self.term.is_set():
+            raise ValueError("term has been set")
+
+        with self._dingdong:
+            self._dingdong.wait()
+
+            yield
 
     def __enter__(self):
         return
@@ -110,17 +127,14 @@ class Thread(threading.Thread):
 
     def run(self):
         try:
-            self._run()
+            self._mainloop()
         # pylint: disable=broad-except
         except Exception as e:
             self._exc = e
 
-    def _run(self):
+    def _mainloop(self):
         term = self._listener.term
         fd = self._listener.fd
-        replyq = self._listener.replyq
-        notiq = self._listener.notiq
-        pipebuf = select.PIPE_BUF
         reader = StreamReader()
 
         with select.epoll() as poller:
@@ -132,36 +146,53 @@ class Thread(threading.Thread):
 
                 events = poller.poll(0.05)
                 for _ in events:
+                    self._handle_read(reader)
 
-                    # TODO@haoliang prefer memoryview
-                    data = bytearray(os.read(fd, pipebuf))
-                    if data == b"":
-                        raise EOFError(f"fd#{fd} were closed")
+    def _handle_read(self, reader: StreamReader):
+        term = self._listener.term
+        fd = self._listener.fd
+        replyq = self._listener.replyq
+        notiq = self._listener.notiq
+        bufsize = select.PIPE_BUF
+        dingdong = self._listener._dingdong
 
-                    while True:
-                        if data == b"":
-                            break
+        # TODO@haoliang consider using os.readv for less copy
+        data = os.read(fd, bufsize)
+        if data == b"":
+            raise BrokenPipeError("remote closed pipe")
 
-                        try:
-                            reader.feed(data)
-                        except NeedMore as e:
-                            assert e.readn == len(data)
-                            break
-                        except FulFiled as e:
-                            assert e.readn > 0
-                            data = data[e.readn :]
+        while True:
+            if data == b"":
+                break
 
-                            event = reader.flush()
+            try:
+                reader.feed(data)
+            except NeedMore as e:
+                assert e.readn == len(data)
+                break
+            except FulFiled as e:
+                # pylint: disable=raise-missing-from
 
-                            if isinstance(event, Notification):
-                                notiq.put(event)
-                                continue
+                assert e.readn > 0
+                data = data[e.readn :]
 
-                            if isinstance(event, Reply):
-                                replyq.put(event)
-                                continue
+                event = reader.flush()
 
-                            # pylint: disable=raise-missing-from
-                            raise RuntimeError(f"received an unknown event: {event}")
-                        else:
-                            raise RuntimeError("should never reach here")
+                with dingdong:
+                    if isinstance(event, Notification):
+                        # TODO@haoliang should be notify_all() ?
+                        notiq.put(event)
+                    elif isinstance(event, Reply):
+                        replyq.put(event)
+                    else:
+                        raise RuntimeError(f"received an unknown event: {event}")
+
+                    if isinstance(event, Exit):
+                        term.set()
+                        dingdong.notify_all()
+                        raise BrokenPipeError("remote exited")
+
+                    dingdong.notify()
+
+            else:
+                raise RuntimeError("should never reach here")

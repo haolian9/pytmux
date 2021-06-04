@@ -61,7 +61,7 @@ class EventReaderABC(abc.ABC):
 
 class EventReader(EventReaderABC):
     def __init__(self):
-        self._buffer = bytearray()
+        self._lines: T.List[bytes] = []
         self._event_cls: T.Optional[types.Event] = None
         self._fulfiled = False
 
@@ -78,9 +78,10 @@ class EventReader(EventReaderABC):
         self._current(line)
 
     def _head_wrap(self, line: bytes):
-        assert not self._buffer
+        assert not self._lines
         assert not self._event_cls
         assert not self._fulfiled
+        # pylint: disable=comparison-with-callable
         assert self._current == self._head_wrap
 
         header = header_in_line(line)
@@ -91,7 +92,7 @@ class EventReader(EventReaderABC):
             pass
         else:
             self._event_cls = cls
-            self._buffer.extend(line)
+            self._lines.append(line)
             self._fulfiled = True
 
             _log.debug("head wrap indicates oneline event, FULFILED")
@@ -103,7 +104,7 @@ class EventReader(EventReaderABC):
             pass
         else:
             self._event_cls = cls
-            self._buffer.extend(line)
+            self._lines.append(line)
             _log.debug("head wrap indicates multiline event, waiting for body")
             self._current = self._body
             raise NeedMore(len(line))
@@ -113,7 +114,7 @@ class EventReader(EventReaderABC):
     def _body(self, line: bytes):
         assert self._event_cls
 
-        self._buffer.extend(line)
+        self._lines.append(line)
 
         if self._is_end_wrap(line):
             _log.debug("reached end wrap, FULFILED")
@@ -138,11 +139,11 @@ class EventReader(EventReaderABC):
         if not self._fulfiled:
             raise NeedMore(0)
 
-        data = self._buffer
+        lines = self._lines
         assert self._event_cls
-        event = self._event_cls.from_bytes(data)
+        event = self._event_cls.from_lined_bytes(lines)
 
-        self._buffer = bytearray()
+        self._lines = []
         self._event_cls = None
         self._fulfiled = False
         self._current = self._head_wrap
@@ -159,7 +160,7 @@ class StreamReader:
         self._er = er if er else EventReader()
 
     def feed(self, data: bytes):
-        _log.debug("feed %s data", len(data))
+        _log.debug("feed %s bytes", len(data))
 
         if self._er.fulfiled:
             raise FulFiled(0)

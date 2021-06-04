@@ -42,3 +42,14 @@ def test_red_on_closed_pipe():
 
     out = os.read(rfd, 1)
     assert out == b""
+
+
+def test_readv():
+    fd = os.open("/dev/zero", os.O_RDONLY)
+
+    orig = b"abc"
+    buffer = bytearray(orig)
+    readn = os.readv(fd, [buffer])
+
+    assert readn == 3
+    assert buffer == b"\x00" * 3
