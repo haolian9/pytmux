@@ -8,7 +8,7 @@ from queue import Empty, Queue
 import attr
 
 from .reader import StreamReader
-from .types import Exit, Notification, Reply
+from .types import Notification, Reply
 
 
 class ReplyQ:
@@ -85,12 +85,11 @@ class Listener:
         """
         :raise: ValueError when term.is_set()
         """
-
-        if self.term.is_set():
-            raise ValueError("term has been set")
-
         with self._dingdong:
             self._dingdong.wait()
+
+            if self.term.is_set():
+                raise ValueError("term has been set")
 
             yield
 
@@ -136,43 +135,39 @@ class Thread(threading.Thread):
         term = self._listener.term
         fd = self._listener.fd
         reader = StreamReader()
+        bufsize = select.PIPE_BUF
+        replyq = self._listener.replyq
+        notiq = self._listener.notiq
+        dingdong = self._listener._dingdong
 
         with select.epoll() as poller:
             poller.register(fd, select.EPOLLIN)
 
             while True:
                 if term.is_set():
+                    with dingdong:
+                        dingdong.notify_all()
                     break
 
                 events = poller.poll(0.05)
                 for _ in events:
-                    self._handle_read(reader)
 
-    def _handle_read(self, reader: StreamReader):
-        term = self._listener.term
-        fd = self._listener.fd
-        replyq = self._listener.replyq
-        notiq = self._listener.notiq
-        bufsize = select.PIPE_BUF
-        dingdong = self._listener._dingdong
+                    data = os.read(fd, bufsize)
+                    if data == b"":
+                        term.set()
+                        with dingdong:
+                            dingdong.notify_all()
+                        raise BrokenPipeError("remote closed pipe")
 
-        data = os.read(fd, bufsize)
-        if data == b"":
-            raise BrokenPipeError("remote closed pipe")
+                    for event in reader.feed(data):
+                        with dingdong:
+                            if isinstance(event, Notification):
+                                notiq.put(event)
+                            elif isinstance(event, Reply):
+                                replyq.put(event)
+                            else:
+                                raise RuntimeError(
+                                    f"received an unknown event: {event}"
+                                )
 
-        for event in reader.feed(data):
-            with dingdong:
-                if isinstance(event, Notification):
-                    # TODO@haoliang should be notify_all() ?
-                    notiq.put(event)
-                elif isinstance(event, Reply):
-                    replyq.put(event)
-                else:
-                    raise RuntimeError(f"received an unknown event: {event}")
-
-                if isinstance(event, Exit):
-                    term.set()
-                    dingdong.notify_all()
-                    raise BrokenPipeError("remote exited")
-
-                dingdong.notify()
+                            dingdong.notify()
