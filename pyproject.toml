@@ -8,6 +8,7 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = "^3.9"
 attrs = "^21.2.0"
+trio = "^0.18.0"
 
 [tool.poetry.dev-dependencies]
 

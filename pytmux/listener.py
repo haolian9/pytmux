@@ -7,7 +7,7 @@ from queue import Empty, Queue
 
 import attr
 
-from .reader import FulFiled, NeedMore, StreamReader
+from .reader import StreamReader
 from .types import Exit, Notification, Reply
 
 
@@ -156,43 +156,23 @@ class Thread(threading.Thread):
         bufsize = select.PIPE_BUF
         dingdong = self._listener._dingdong
 
-        # TODO@haoliang consider using os.readv for less copy
         data = os.read(fd, bufsize)
         if data == b"":
             raise BrokenPipeError("remote closed pipe")
 
-        while True:
-            if data == b"":
-                break
+        for event in reader.feed(data):
+            with dingdong:
+                if isinstance(event, Notification):
+                    # TODO@haoliang should be notify_all() ?
+                    notiq.put(event)
+                elif isinstance(event, Reply):
+                    replyq.put(event)
+                else:
+                    raise RuntimeError(f"received an unknown event: {event}")
 
-            try:
-                reader.feed(data)
-            except NeedMore as e:
-                assert e.readn == len(data)
-                break
-            except FulFiled as e:
-                # pylint: disable=raise-missing-from
+                if isinstance(event, Exit):
+                    term.set()
+                    dingdong.notify_all()
+                    raise BrokenPipeError("remote exited")
 
-                assert e.readn > 0
-                data = data[e.readn :]
-
-                event = reader.flush()
-
-                with dingdong:
-                    if isinstance(event, Notification):
-                        # TODO@haoliang should be notify_all() ?
-                        notiq.put(event)
-                    elif isinstance(event, Reply):
-                        replyq.put(event)
-                    else:
-                        raise RuntimeError(f"received an unknown event: {event}")
-
-                    if isinstance(event, Exit):
-                        term.set()
-                        dingdong.notify_all()
-                        raise BrokenPipeError("remote exited")
-
-                    dingdong.notify()
-
-            else:
-                raise RuntimeError("should never reach here")
+                dingdong.notify()
