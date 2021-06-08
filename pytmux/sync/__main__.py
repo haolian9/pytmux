@@ -20,11 +20,11 @@ def parse_args():
 
 def main():
     # pylint: disable=import-outside-toplevel
-    from pytmux import commands
+    from pytmux.sync import cli
 
     args = parse_args()
 
-    commands.ensure_tmux_compatible()
+    cli.ensure_tmux_compatible()
 
     if args.op == "listen":
         if args.listen_op == "attach":
@@ -36,7 +36,7 @@ def main():
         else:
             raise SystemExit("unknown listen op")
 
-        commands.listen_all_events(tmux_args)
+        cli.listen_all_events(tmux_args)
     else:
         raise SystemExit("unknown op")
 
