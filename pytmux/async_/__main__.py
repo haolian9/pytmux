@@ -1,12 +1,17 @@
+"""
+# TODO@haoliang avoid output mixed up stdin while typing
+"""
+
 import logging
 import select
 import subprocess
+import sys
 
 import trio
 from pytmux.reader import StreamReader
 from pytmux.types import Notification, Reply
 from trio import MemoryReceiveChannel, MemorySendChannel
-from trio.abc import ReceiveStream
+from trio.abc import ReceiveStream, SendStream
 from trio.lowlevel import FdStream
 
 
@@ -44,8 +49,35 @@ async def main():
                     await stdout.send_all(str(event).encode())
                     await stdout.send_all(b"\n")
 
+    async def forward_stdin(src: ReceiveStream, dest: SendStream):
+        banned_prefixes = {
+            b"run-shell",
+        }
+
+        bufsize = select.PIPE_BUF
+
+        buf = bytearray()
+        while True:
+            chunk: bytes = await src.receive_some(bufsize)
+            eol_at = chunk.find(b"\n")
+
+            if eol_at < 0:
+                buf.extend(chunk)
+                continue
+
+            buf.extend(chunk[: eol_at + 1])
+            line = buf
+            buf = bytearray(chunk[eol_at + 1 :])
+
+            for banned in banned_prefixes:
+                if line.startswith(banned):
+                    logging.info("%s was banned, skipping line: %s", banned, line)
+                    break
+            else:
+                await dest.send_all(line)
+
     async def listen(
-        receive_stream: ReceiveStream,
+        stdout: ReceiveStream,
         reply_sender: MemorySendChannel,
         noti_sender: MemorySendChannel,
     ):
@@ -54,7 +86,7 @@ async def main():
 
         reply_send = reply_sender.send
         noti_send = noti_sender.send
-        recv = receive_stream.receive_some
+        recv = stdout.receive_some
 
         async with reply_sender, noti_sender:
             while True:
@@ -75,7 +107,7 @@ async def main():
     proc: trio.Process = await trio.open_process(
         command,
         shell=False,
-        stdin=None,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=None,
     )
@@ -85,6 +117,9 @@ async def main():
 
     async with proc:
         async with trio.open_nursery() as nursery:
+
+            nursery.start_soon(forward_stdin, FdStream(sys.stdin.fileno()), proc.stdin)
+
             reply_sender, reply_receiver = trio.open_memory_channel(5)
             noti_sender, noti_receiver = trio.open_memory_channel(10)
 
