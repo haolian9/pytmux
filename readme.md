@@ -4,6 +4,7 @@ todo:
 * publish as a library
     * rm unnecessary deps, like trio
     * add a setup.py
+* refactor to suffice [sans I/O](https://sans-io.readthedocs.io)
 
 
 test cases:
