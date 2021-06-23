@@ -3,7 +3,6 @@
 """
 
 import logging
-import select
 import subprocess
 import sys
 
@@ -29,8 +28,10 @@ async def basic_listener():
         logging.debug("sending a command")
         await stdin.send_all(b"list-sessions\n")
 
+        bufsize = 8 << 10
+
         while True:
-            out = await stdout.receive_some(select.PIPE_BUF)
+            out = await stdout.receive_some(bufsize)
             if out == b"":
                 logging.debug("remote pipe was closed")
                 break
@@ -54,7 +55,8 @@ async def main():
             b"run-shell",
         }
 
-        bufsize = select.PIPE_BUF
+        # since stdin will not be too big, lesser for faster response and lower memory footprint
+        bufsize = 1 << 8
 
         buf = bytearray()
         while True:
@@ -82,10 +84,11 @@ async def main():
         noti_sender: MemorySendChannel,
     ):
         reader = StreamReader()
-        bufsize = select.PIPE_BUF
 
         reply_send = reply_sender.send
         noti_send = noti_sender.send
+
+        bufsize = 8 << 10
         recv = stdout.receive_some
 
         async with reply_sender, noti_sender:
